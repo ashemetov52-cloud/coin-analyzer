@@ -1,0 +1,37 @@
+name: Daily Claude Report
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # 05:00 UTC = 08:00 МСК каждый день
+  workflow_dispatch:       # Кнопка для ручного запуска
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Вся история коммитов
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Generate daily report
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/daily_report.py
+
+      - name: Save report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-report-${{ github.run_number }}
+          path: report.md
+          retention-days: 30
