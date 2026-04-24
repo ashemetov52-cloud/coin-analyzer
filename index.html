@@ -1163,16 +1163,136 @@
   });
 
   // ── Analyze button ──
-  analyzeBtn.addEventListener('click', () => {
+  // ── OpenRouter Vision API ──
+  const OPENROUTER_KEY = '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';
+  const MODEL = 'anthropic/claude-opus-4.6';
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function updateGradeScale(gradeStr) {
+    const grades = ['Poor','Fair','AG','G','VG','F','VF','EF','AU','UNC'];
+    const idx = grades.findIndex(g => gradeStr.toUpperCase().startsWith(g.toUpperCase()));
+    const pct = idx >= 0 ? (idx / (grades.length - 1)) * 100 : 50;
+    const fill = document.getElementById('gradeFill');
+    const marker = document.getElementById('gradeMarker');
+    if (fill) fill.style.width = pct + '%';
+    if (marker) marker.style.left = pct + '%';
+    document.querySelectorAll('.grade-labels span').forEach((el, i) => {
+      el.classList.toggle('active', i === idx);
+      el.textContent = i === idx ? grades[i] + ' ◂' : grades[i];
+    });
+  }
+
+  analyzeBtn.addEventListener('click', async () => {
+    if (!currentFile) return;
+
     analyzeBtn.classList.add('loading');
     analyzeBtn.disabled = true;
+    resultCard.classList.remove('visible');
 
-    setTimeout(() => {
-      analyzeBtn.classList.remove('loading');
-      analyzeBtn.disabled = false;
+    try {
+      const base64 = await fileToBase64(currentFile);
+      const mime = currentFile.type || 'image/jpeg';
+
+      const prompt = `Ты — эксперт-нумизмат с 30-летним стажем. Внимательно изучи монету на фото.
+
+ВАЖНО: Смотри на ВСЕ детали — надписи, язык, символы, гербы, цифры года, страну выпуска.
+Например монеты DDR (ГДР), СССР, Германии, США, Великобритании — все разные. Не путай их.
+Определи страну строго по надписям и символам на монете.
+
+Верни ТОЛЬКО JSON без markdown и без пояснений:
+{
+  "title_ru": "номинал и страна по-русски, например: 1 Марка ГДР 1975",
+  "title_en": "denomination and country in English, e.g.: 1 Mark DDR 1975",
+  "subtitle_ru": "металл, монетный двор если известен",
+  "subtitle_en": "metal, mint if known",
+  "confidence": число от 0 до 100,
+  "grade": "грейд например VF-30",
+  "grade_desc_ru": "Very Fine — очень хорошее состояние",
+  "grade_desc_en": "Very Fine — good circulation wear",
+  "price_ru": "диапазон цены в рублях например 200 – 500 ₽",
+  "price_en": "price range in USD for example $3 – $8",
+  "mintage": "тираж или неизвестен",
+  "size": "диаметр мм / масса г",
+  "history_ru": "историческая справка 3-4 предложения",
+  "history_en": "historical reference 3-4 sentences",
+  "defects_ru": ["дефект 1", "дефект 2"],
+  "defects_en": ["defect 1", "defect 2"]
+}`;
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${OPENROUTER_KEY}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://ashemetov52-cloud.github.io/coin-analyzer',
+          'X-Title': 'Монетный анализатор'
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [{
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:${mime};base64,${base64}` } },
+              { type: 'text', text: prompt }
+            ]
+          }],
+          max_tokens: 1200
+        })
+      });
+
+      if (!response.ok) throw new Error('API error: ' + response.status);
+
+      const data = await response.json();
+      const text = data.choices[0].message.content.trim();
+      const clean = text.replace(/```json|```/g, '').trim();
+      const coin = JSON.parse(clean);
+
+      document.querySelector('.result-title').textContent = currentLang === 'en' ? coin.title_en : coin.title_ru;
+      document.querySelectorAll('.result-subtitle').forEach(el => {
+        if (el.hasAttribute('data-ru')) el.textContent = coin.subtitle_ru;
+        if (el.hasAttribute('data-en')) el.textContent = coin.subtitle_en;
+      });
+      document.querySelector('.confidence-badge strong').textContent = coin.confidence + '%';
+
+      const allValues = document.querySelectorAll('.info-block-value');
+      if (allValues[0]) allValues[0].textContent = coin.grade;
+      if (allValues[1]) allValues[1].textContent = currentLang === 'en' ? coin.price_en : coin.price_ru;
+      if (allValues[2]) allValues[2].textContent = coin.mintage;
+      if (allValues[3]) allValues[3].textContent = coin.size;
+
+      document.querySelectorAll('.history-block p').forEach(el => {
+        if (el.hasAttribute('data-ru')) el.textContent = coin.history_ru;
+        if (el.hasAttribute('data-en')) el.textContent = coin.history_en;
+      });
+
+      const defList = document.querySelector('.defects-list');
+      if (defList) {
+        const defects = currentLang === 'en' ? coin.defects_en : coin.defects_ru;
+        defList.innerHTML = defects.map(d => `<li>${d}</li>`).join('');
+      }
+
+      updateGradeScale(coin.grade);
       resultCard.classList.add('visible');
       resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 1800);
+
+    } catch (err) {
+      console.error(err);
+      const msg = currentLang === 'en'
+        ? 'Analysis error. Please try again.'
+        : 'Ошибка анализа. Попробуйте ещё раз.';
+      alert(msg);
+    } finally {
+      analyzeBtn.classList.remove('loading');
+      analyzeBtn.disabled = false;
+    }
   });
 
   // ── Expert form ──
