@@ -1125,8 +1125,11 @@
   const changeBtn   = document.getElementById('changeBtn');
   const resultCard  = document.getElementById('resultCard');
 
+  let currentFile = null;
+
   function showPreview(file) {
     if (!file || !file.type.startsWith('image/')) return;
+    currentFile = file;
     const url = URL.createObjectURL(file);
     previewImg.src = url;
     const kb = (file.size / 1024).toFixed(0);
